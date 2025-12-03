@@ -140,8 +140,9 @@ contract ScheduledTxModuleTest is TestSafeBase {
         uint64 deadline = uint64(block.timestamp + 1 days);
         uint256 nonce = 0;
 
-        bytes32 structHash =
-            keccak256(abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline));
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
 
@@ -241,8 +242,9 @@ contract ScheduledTxModuleTest is TestSafeBase {
         uint64 executeAfter = uint64(block.timestamp);
         uint64 deadline = uint64(block.timestamp + 1 days);
 
-        bytes32 structHash =
-            keccak256(abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, 1 ether, bytes(""), 0, executeAfter, deadline));
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, 1 ether, bytes(""), 0, executeAfter, deadline)
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
 
