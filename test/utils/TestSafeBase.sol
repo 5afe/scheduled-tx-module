@@ -20,7 +20,11 @@ abstract contract TestSafeBase is Test {
     SafeProxyFactory internal proxyFactory = new SafeProxyFactory();
     CompatibilityFallbackHandler internal handler = new CompatibilityFallbackHandler();
 
-    function _setupSafe(uint256[] memory ownerPKs, uint256 threshold, uint256 salt)
+    function _setupSafe(
+        uint256[] memory ownerPKs,
+        uint256 threshold,
+        uint256 salt
+    )
         public
         returns (SafeInstance memory)
     {
@@ -67,13 +71,21 @@ abstract contract TestSafeBase is Test {
         address gasToken,
         address refundReceiver,
         bytes memory signatures
-    ) internal returns (bool) {
+    )
+        internal
+        returns (bool)
+    {
         return _execTransaction(
             instance, to, value, data, operation, safeTxGas, baseGas, gasPrice, gasToken, refundReceiver, signatures
         );
     }
 
-    function execTransaction(SafeInstance memory instance, address to, uint256 value, bytes memory data)
+    function execTransaction(
+        SafeInstance memory instance,
+        address to,
+        uint256 value,
+        bytes memory data
+    )
         internal
         returns (bool)
     {
@@ -92,22 +104,26 @@ abstract contract TestSafeBase is Test {
         address gasToken,
         address refundReceiver,
         bytes memory signatures
-    ) internal returns (bool) {
+    )
+        internal
+        returns (bool)
+    {
         bytes32 safeTxHash;
         {
             uint256 _nonce = instance.safe.nonce();
-            safeTxHash = instance.safe.getTransactionHash({
-                to: to,
-                value: value,
-                data: data,
-                operation: operation,
-                safeTxGas: safeTxGas,
-                baseGas: baseGas,
-                gasPrice: gasPrice,
-                gasToken: gasToken,
-                refundReceiver: refundReceiver,
-                _nonce: _nonce
-            });
+            safeTxHash = instance.safe
+                .getTransactionHash({
+                    to: to,
+                    value: value,
+                    data: data,
+                    operation: operation,
+                    safeTxGas: safeTxGas,
+                    baseGas: baseGas,
+                    gasPrice: gasPrice,
+                    gasToken: gasToken,
+                    refundReceiver: refundReceiver,
+                    _nonce: _nonce
+                });
         }
 
         if (signatures.length == 0) {
@@ -119,17 +135,18 @@ abstract contract TestSafeBase is Test {
             }
         }
 
-        return instance.safe.execTransaction({
-            to: to,
-            value: value,
-            data: data,
-            operation: operation,
-            safeTxGas: safeTxGas,
-            baseGas: baseGas,
-            gasPrice: gasPrice,
-            gasToken: gasToken,
-            refundReceiver: payable(refundReceiver),
-            signatures: signatures
-        });
+        return instance.safe
+            .execTransaction({
+                to: to,
+                value: value,
+                data: data,
+                operation: operation,
+                safeTxGas: safeTxGas,
+                baseGas: baseGas,
+                gasPrice: gasPrice,
+                gasToken: gasToken,
+                refundReceiver: payable(refundReceiver),
+                signatures: signatures
+            });
     }
 }

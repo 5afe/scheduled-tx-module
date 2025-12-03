@@ -6,7 +6,8 @@ import {ISafe} from "./interfaces/ISafe.sol";
 /**
  * @title ScheduledTxModule
  * @notice A Safe module that allows scheduling transactions with time-based execution windows
- * @dev Uses EIP-712 signatures to authorize scheduled transactions that can only be executed within specified time windows
+ * @dev Uses EIP-712 signatures to authorize scheduled transactions that can only be executed within specified time
+ * windows
  */
 contract ScheduledTxModule {
     /**
@@ -85,7 +86,9 @@ contract ScheduledTxModule {
         uint64 executeAfter,
         uint64 deadline,
         bytes memory signatures
-    ) external {
+    )
+        external
+    {
         require(block.timestamp <= deadline, TransactionExpired());
         require(block.timestamp >= executeAfter, TooEarly());
         require(nonces[safe][nonce] == false, AlreadyExecuted());
