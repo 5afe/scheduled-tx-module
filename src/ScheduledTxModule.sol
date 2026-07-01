@@ -25,6 +25,19 @@ contract ScheduledTxModule {
     mapping(address safe => mapping(uint256 nonce => bool used)) public nonces;
 
     /**
+     * @notice Tracks which nonces have been cancelled for each Safe
+     * @dev Mapping from Safe address to nonce to cancellation status.
+     */
+    mapping(address safe => mapping(uint256 nonce => bool cancelled)) public cancelled;
+
+    /**
+     * @notice Emitted when a Safe cancels a scheduled transaction by nonce
+     * @param safe The Safe that cancelled the scheduled transaction
+     * @param nonce The nonce that was cancelled
+     */
+    event Cancelled(address indexed safe, uint256 indexed nonce);
+
+    /**
      * @notice Thrown when attempting to execute a transaction after its deadline
      */
     error TransactionExpired();
@@ -43,6 +56,11 @@ contract ScheduledTxModule {
      * @notice Thrown when the module transaction execution fails
      */
     error ModuleTxFailed();
+
+    /**
+     * @notice Thrown when attempting to execute a transaction that has been cancelled
+     */
+    error TransactionCancelled();
 
     /**
      * @notice Generates the EIP-712 domain separator for this contract
@@ -75,6 +93,7 @@ contract ScheduledTxModule {
      * @custom:reverts TooEarly if current timestamp is before executeAfter
      * @custom:reverts TransactionExpired if current timestamp is after deadline
      * @custom:reverts AlreadyExecuted if this nonce has already been used for this Safe
+     * @custom:reverts TransactionCancelled if this nonce has been cancelled for this Safe
      * @custom:reverts ModuleTxFailed if the Safe transaction execution fails
      */
     function execute(
@@ -92,6 +111,7 @@ contract ScheduledTxModule {
         require(block.timestamp <= deadline, TransactionExpired());
         require(block.timestamp >= executeAfter, TooEarly());
         require(nonces[safe][nonce] == false, AlreadyExecuted());
+        require(cancelled[safe][nonce] == false, TransactionCancelled());
 
         nonces[safe][nonce] = true;
 
@@ -102,5 +122,18 @@ contract ScheduledTxModule {
         ISafe(payable(safe)).checkSignatures(hash, abi.encodePacked(signatureData), signatures);
 
         require(ISafe(payable(safe)).execTransactionFromModule(to, value, data, 0), ModuleTxFailed());
+    }
+
+    /**
+     * @notice Cancels a scheduled transaction so it can be blocked before execution.
+     * @dev Must be called by the Safe itself, via Safe transaction. Cancelling an already-cancelled
+     * nonce is a no-op; cancelling an already-executed nonce reverts with AlreadyExecuted.
+     * @param nonce The nonce of the scheduled transaction to cancel
+     * @custom:reverts AlreadyExecuted if this nonce has already been executed for the caller
+     */
+    function cancel(uint256 nonce) external {
+        require(nonces[msg.sender][nonce] == false, AlreadyExecuted());
+        cancelled[msg.sender][nonce] = true;
+        emit Cancelled(msg.sender, nonce);
     }
 }
