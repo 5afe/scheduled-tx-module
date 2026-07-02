@@ -117,9 +117,11 @@ contract ScheduledTxModule {
 
         bytes32 signatureData = keccak256(abi.encode(PERMIT_TYPEHASH, to, value, data, nonce, executeAfter, deadline));
 
-        bytes32 hash = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), signatureData));
+        bytes memory encodedData = abi.encodePacked("\x19\x01", getDomainSeparator(), signatureData);
 
-        ISafe(payable(safe)).checkSignatures(hash, abi.encodePacked(signatureData), signatures);
+        bytes32 hash = keccak256(encodedData);
+
+        ISafe(payable(safe)).checkSignatures(hash, encodedData, signatures);
 
         require(ISafe(payable(safe)).execTransactionFromModule(to, value, data, 0), ModuleTxFailed());
     }
