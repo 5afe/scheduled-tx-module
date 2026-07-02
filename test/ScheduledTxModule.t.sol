@@ -6,14 +6,21 @@ import {ScheduledTxModule} from "../src/ScheduledTxModule.sol";
 import {TestSafeBase} from "./utils/TestSafeBase.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Safe} from "safe-smart-account/Safe.sol";
+import {SignMessageLib} from "safe-smart-account/libraries/SignMessageLib.sol";
+import {Enum} from "safe-smart-account/common/Enum.sol";
 
 contract ScheduledTxModuleTest is TestSafeBase {
     ScheduledTxModule scheduledTxModule;
     SafeInstance instance;
     ERC20 token;
+    SignMessageLib signMessageLib;
+
+    event Cancelled(address indexed safe, uint256 indexed nonce);
 
     function setUp() public {
         scheduledTxModule = new ScheduledTxModule();
+        signMessageLib = new SignMessageLib();
         (, uint256 key) = makeAddrAndKey("alice");
         uint256[] memory ownerPKs = new uint256[](1);
         ownerPKs[0] = key;
@@ -258,5 +265,239 @@ contract ScheduledTxModuleTest is TestSafeBase {
         scheduledTxModule.execute(
             address(instance.safe), to, 1 ether, "", 0, executeAfter, deadline, abi.encodePacked(r, s, v)
         );
+    }
+
+    function test_CancelPreventsExecution() public {
+        address to = makeAddr("bob");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        uint256 nonce = 0;
+
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
+
+        // Safe cancels the scheduled transaction
+        bytes memory cancelData = abi.encodeWithSelector(ScheduledTxModule.cancel.selector, nonce);
+        execTransaction(instance, address(scheduledTxModule), 0, cancelData);
+
+        assertTrue(scheduledTxModule.cancelled(address(instance.safe), nonce));
+
+        vm.expectRevert(ScheduledTxModule.TransactionCancelled.selector);
+        scheduledTxModule.execute(
+            address(instance.safe), to, value, "", nonce, executeAfter, deadline, abi.encodePacked(r, s, v)
+        );
+    }
+
+    function test_CancelEmitsEvent() public {
+        uint256 nonce = 5;
+        bytes memory cancelData = abi.encodeWithSelector(ScheduledTxModule.cancel.selector, nonce);
+
+        vm.expectEmit(true, true, false, false, address(scheduledTxModule));
+        emit Cancelled(address(instance.safe), nonce);
+
+        execTransaction(instance, address(scheduledTxModule), 0, cancelData);
+    }
+
+    function test_CancelBeforeAnyExecution() public {
+        address to = makeAddr("bob");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        uint256 nonce = 0;
+
+        // Cancel a nonce for which no permit has ever been signed
+        bytes memory cancelData = abi.encodeWithSelector(ScheduledTxModule.cancel.selector, nonce);
+        execTransaction(instance, address(scheduledTxModule), 0, cancelData);
+
+        // A freshly signed permit on that same nonce is still un-executable
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
+
+        vm.expectRevert(ScheduledTxModule.TransactionCancelled.selector);
+        scheduledTxModule.execute(
+            address(instance.safe), to, value, "", nonce, executeAfter, deadline, abi.encodePacked(r, s, v)
+        );
+    }
+
+    function test_CannotCancelAnotherSafesNonce() public {
+        (, uint256 bobKey) = makeAddrAndKey("bob");
+        uint256[] memory bobPKs = new uint256[](1);
+        bobPKs[0] = bobKey;
+        SafeInstance memory instance2 = _setupSafe(bobPKs, 1, 1);
+        enableModule(instance2, address(scheduledTxModule));
+        vm.deal(address(instance2.safe), 1000 ether);
+
+        address to = makeAddr("charlie");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        uint256 nonce = 0;
+
+        // instance cancels its own nonce 0
+        bytes memory cancelData = abi.encodeWithSelector(ScheduledTxModule.cancel.selector, nonce);
+        execTransaction(instance, address(scheduledTxModule), 0, cancelData);
+
+        // instance2's nonce 0 is unaffected: a valid permit still executes
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance2.ownerPKs[0], digest);
+
+        uint256 beforeBalance = to.balance;
+        scheduledTxModule.execute(
+            address(instance2.safe), to, value, "", nonce, executeAfter, deadline, abi.encodePacked(r, s, v)
+        );
+
+        assertFalse(scheduledTxModule.cancelled(address(instance2.safe), nonce));
+        assertEq(to.balance - beforeBalance, value);
+    }
+
+    function test_CanStillExecuteUncancelledNonce() public {
+        address to = makeAddr("bob");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+
+        // Cancel nonce 0
+        bytes memory cancelData = abi.encodeWithSelector(ScheduledTxModule.cancel.selector, uint256(0));
+        execTransaction(instance, address(scheduledTxModule), 0, cancelData);
+
+        // Nonce 1 is untouched and executes normally
+        uint256 nonce = 1;
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
+
+        uint256 beforeBalance = to.balance;
+        scheduledTxModule.execute(
+            address(instance.safe), to, value, "", nonce, executeAfter, deadline, abi.encodePacked(r, s, v)
+        );
+
+        assertEq(to.balance - beforeBalance, value);
+    }
+
+    function test_CannotCancelAlreadyExecutedNonce() public {
+        address to = makeAddr("bob");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        uint256 nonce = 0;
+
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], digest);
+
+        scheduledTxModule.execute(
+            address(instance.safe), to, value, "", nonce, executeAfter, deadline, abi.encodePacked(r, s, v)
+        );
+
+        // Cancelling an already-executed nonce reverts and never marks it cancelled.
+        // Prank as the Safe so cancel's msg.sender check applies to the executed nonce.
+        vm.prank(address(instance.safe));
+        vm.expectRevert(ScheduledTxModule.AlreadyExecuted.selector);
+        scheduledTxModule.cancel(nonce);
+
+        assertFalse(scheduledTxModule.cancelled(address(instance.safe), nonce));
+    }
+
+    function test_ExecuteWithEIP1271ContractOwner() public {
+        // Setup a parent Safe owned by alice (an EOA), so it can produce EIP-1271 signatures.
+        address[] memory parentOwners = new address[](1);
+        parentOwners[0] = vm.addr(instance.ownerPKs[0]);
+        bytes memory initData = abi.encodeWithSelector(
+            Safe.setup.selector,
+            parentOwners,
+            uint256(1),
+            address(0),
+            "",
+            address(handler),
+            address(0),
+            uint256(0),
+            address(0)
+        );
+        Safe parentSafe = Safe(payable(address(proxyFactory.createProxyWithNonce(address(singleton), initData, 42))));
+
+        // Make parentSafe the owner of the main Safe instance (replacing alice, the EOA owner).
+        // 0x1 is the sentinel node that precedes the first owner in the linked list.
+        bytes memory swapOwnerData = abi.encodeWithSignature(
+            "swapOwner(address,address,address)", address(0x1), vm.addr(instance.ownerPKs[0]), address(parentSafe)
+        );
+        execTransaction(instance, address(instance.safe), 0, swapOwnerData);
+
+        // Module is already enabled on instance in setUp().
+
+        address to = makeAddr("bob");
+        uint256 value = 1 ether;
+        uint64 executeAfter = uint64(block.timestamp);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        uint256 nonce = 0;
+
+        // Sign the scheduled transaction from parentSafe: pre-approve the permit pre-image so
+        // parentSafe's EIP-1271 validation passes when the module calls checkSignatures.
+        bytes32 structHash = keccak256(
+            abi.encode(scheduledTxModule.PERMIT_TYPEHASH(), to, value, bytes(""), nonce, executeAfter, deadline)
+        );
+        bytes memory preimage = abi.encodePacked("\x19\x01", getDomainSeparator(), structHash);
+        signMessageOnParent(parentSafe, preimage);
+        bytes memory contractSig = contractSignature(address(parentSafe));
+
+        // Execute the scheduled transaction on the main Safe instance.
+        uint256 beforeBalance = to.balance;
+        scheduledTxModule.execute(address(instance.safe), to, value, "", nonce, executeAfter, deadline, contractSig);
+
+        assertEq(to.balance - beforeBalance, value);
+        assertTrue(scheduledTxModule.nonces(address(instance.safe), nonce));
+    }
+
+    // Marks `preimage` as signed on `parentSafe` via SignMessageLib (delegatecall), signed by alice.
+    function signMessageOnParent(Safe parentSafe, bytes memory preimage) internal {
+        bytes memory signData = abi.encodeWithSelector(SignMessageLib.signMessage.selector, preimage);
+        uint256 parentNonce = parentSafe.nonce();
+        bytes32 txHash = parentSafe.getTransactionHash(
+            address(signMessageLib),
+            0,
+            signData,
+            Enum.Operation.DelegateCall,
+            0,
+            0,
+            0,
+            address(0),
+            address(0),
+            parentNonce
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(instance.ownerPKs[0], txHash);
+        parentSafe.execTransaction(
+            address(signMessageLib),
+            0,
+            signData,
+            Enum.Operation.DelegateCall,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            abi.encodePacked(r, s, v)
+        );
+    }
+
+    // Safe contract signature (v == 0) pointing at `owner`, with an empty inner signature
+    // (relies on a pre-approved message).
+    function contractSignature(address owner) internal pure returns (bytes memory) {
+        bytes32 r = bytes32(uint256(uint160(owner)));
+        bytes32 s = bytes32(uint256(65));
+        uint8 v = 0;
+        return abi.encodePacked(r, s, v, uint256(0));
     }
 }

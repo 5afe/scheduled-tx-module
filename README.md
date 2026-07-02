@@ -50,7 +50,24 @@ function execute(
 - `TooEarly`: When `block.timestamp < executeAfter`
 - `TransactionExpired`: When `block.timestamp > deadline`
 - `AlreadyExecuted`: When nonce has been used
+- `TransactionCancelled`: When the nonce has been cancelled by the Safe
 - `ModuleTxFailed`: When Safe transaction execution fails
+
+### cancel()
+
+```solidity
+function cancel(uint256 nonce) external
+```
+
+Cancels a scheduled transaction so it can never be executed. Must be called by the Safe itself. Any `execute()` for that Safe and nonce will then revert with `TransactionCancelled`. Cancellation does not require the corresponding permit to have been signed on-chain.
+
+**Parameters:**
+- `nonce`: The nonce of the scheduled transaction to cancel
+
+**Reverts:**
+- `AlreadyExecuted`: When the nonce has already been executed for the caller
+
+**Emits:** `Cancelled(address indexed safe, uint256 indexed nonce)`
 
 ## EIP-712 Type Definition
 
@@ -154,7 +171,7 @@ scheduledTxModule.execute(
 ⚠️ **Important Security Notes:**
 
 1. **Signature Validity**: Signatures remain valid even if Safe configuration changes (e.g., adding owners), as long as the original signer is still an owner
-2. **No Cancellation**: Once signed, transactions cannot be cancelled (only prevented by removing the signer or disabling the module)
+2. **Cancellation**: A Safe can cancel a pending scheduled transaction by calling `cancel(uint256 nonce)`. (Removing the signer or disabling the module also prevents execution, but affects all pending transactions.)
 3. **Permissionless Execution**: Anyone can execute a properly signed transaction within the time window
 4. **Nonce Management**: Nonces are per-Safe and non-sequential
 
